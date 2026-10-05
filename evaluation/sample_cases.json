@@ -1,0 +1,26 @@
+[
+  {
+    "order_id": "ORD123",
+    "expected_reason": "CARRIER_DELAY",
+    "expected_decision": "AUTO_CLASSIFIED",
+    "notes": "Carrier delay after successful payment, inventory, and warehouse handoff."
+  },
+  {
+    "order_id": "ORD124",
+    "expected_reason": "INVENTORY_SHORTAGE",
+    "expected_decision": "AUTO_CLASSIFIED",
+    "notes": "Inventory out of stock before shipment starts."
+  },
+  {
+    "order_id": "ORD125",
+    "expected_reason": "PAYMENT_FAILURE",
+    "expected_decision": "AUTO_CLASSIFIED",
+    "notes": "Payment was declined and fulfillment never started."
+  },
+  {
+    "order_id": "ORD127",
+    "expected_reason": "UNKNOWN_REQUIRES_REVIEW",
+    "expected_decision": "HUMAN_REVIEW",
+    "notes": "Insufficient evidence for a confident classification."
+  }
+]
