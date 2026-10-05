@@ -313,11 +313,12 @@ def route_after_validator(state: Dict[str, Any]) -> str:
 
 
 def route_after_reviewer(state: Dict[str, Any]) -> str:
-    if state.get("review_result") == "HUMAN_REVIEW":
-        return "final_decision"
-    if state.get("review_result") == "REVISE":
-        return "planner"
-    return "validator"
+    decision = (state.get("review_result") or "").upper()
+    if decision == "HUMAN_REVIEW":
+        return "human_review"
+    if decision == "REVISE":
+        return "revise"
+    return "approve"
 
 
 def build_graph() -> Any:
@@ -330,11 +331,11 @@ def build_graph() -> Any:
     workflow.add_node("specialized_agents", specialized_agents_node)
     workflow.add_node("tool_execution", tool_execution_node)
     workflow.add_node("policy_retrieval", policy_retrieval_node)
-    workflow.add_node("classification", classification_node)
+    workflow.add_node("classify_case", classification_node)
     workflow.add_node("critic", critic_node)
     workflow.add_node("reviewer", reviewer_node)
     workflow.add_node("validator", validator_node)
-    workflow.add_node("final_decision", final_decision_node)
+    workflow.add_node("finalize_decision", final_decision_node)
     workflow.add_node("output_guardrails", output_guardrails_node)
 
     workflow.set_entry_point("input_guardrails")
@@ -345,12 +346,12 @@ def build_graph() -> Any:
     workflow.add_edge("router", "specialized_agents")
     workflow.add_edge("specialized_agents", "tool_execution")
     workflow.add_edge("tool_execution", "policy_retrieval")
-    workflow.add_edge("policy_retrieval", "classification")
-    workflow.add_edge("classification", "critic")
+    workflow.add_edge("policy_retrieval", "classify_case")
+    workflow.add_edge("classify_case", "critic")
     workflow.add_edge("critic", "reviewer")
-    workflow.add_conditional_edges("reviewer", route_after_reviewer, {"approve": "validator", "revise": "planner", "human_review": "final_decision"})
-    workflow.add_conditional_edges("validator", route_after_validator, {"final_decision": "final_decision", "supervisor": "supervisor"})
-    workflow.add_edge("final_decision", "output_guardrails")
+    workflow.add_conditional_edges("reviewer", route_after_reviewer, {"approve": "validator", "revise": "planner", "human_review": "finalize_decision"})
+    workflow.add_conditional_edges("validator", route_after_validator, {"final_decision": "finalize_decision", "supervisor": "supervisor"})
+    workflow.add_edge("finalize_decision", "output_guardrails")
     workflow.add_edge("output_guardrails", END)
 
     return workflow.compile()

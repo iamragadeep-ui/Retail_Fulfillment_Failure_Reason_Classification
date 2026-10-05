@@ -20,6 +20,7 @@ from .models import AgentRun, AuditLog, Case, Classification, HumanReview, Workf
 from .schemas import CaseAnalyzeRequest, CaseResponse, DashboardStats, ErrorResponse, HealthResponse, ReviewSubmission
 
 app = FastAPI(title=settings.APP_NAME, version="1.0.0")
+init_db()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
