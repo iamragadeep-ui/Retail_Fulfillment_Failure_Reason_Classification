@@ -45,3 +45,5 @@ class FulfillmentState(TypedDict, total=False):
     cost: float
     final_decision: str
     final_response: str
+    guardrail_status: str
+    guardrail_reason: str

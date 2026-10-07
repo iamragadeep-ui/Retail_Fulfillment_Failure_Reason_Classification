@@ -13,6 +13,20 @@ from .security import input_guardrails, output_guardrails
 from .state import FulfillmentState
 from .tools import ToolExecutor
 
+from .guardrails.input_guardrail import InputGuardrail
+from .guardrails.planning_guardrail import PlanningGuardrail
+from .guardrails.tool_guardrail import ToolGuardrail
+from .guardrails.action_guardrail import ActionGuardrail
+from .guardrails.human_approval import HumanApprovalGuardrail
+from .guardrails.output_guardrail import OutputGuardrail
+
+input_policy_guardrail = InputGuardrail()
+planning_policy_guardrail = PlanningGuardrail()
+tool_policy_guardrail = ToolGuardrail()
+action_policy_guardrail = ActionGuardrail()
+human_approval_guardrail = HumanApprovalGuardrail()
+output_policy_guardrail = OutputGuardrail()
+
 
 def _build_status_summary(state: Dict[str, Any]) -> Dict[str, Any]:
     order_data = state.get("order_data", {})
@@ -74,16 +88,6 @@ def _determine_failure_reason(state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def input_guardrails_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    payload = {"order_id": state.get("order_id"), "customer_id": state.get("customer_id"), "failure_description": state.get("failure_description"), "request": state.get("request")}
-    checks = input_guardrails(payload)
-    state["messages"] = state.get("messages", []) + ["Input guardrails checked."]
-    state["errors"] = []
-    if checks["prompt_injection_detected"] or checks["secret_detected"]:
-        state["errors"].append("Unsafe request content detected.")
-    return state
-
-
 def case_intake_node(state: Dict[str, Any]) -> Dict[str, Any]:
     state.setdefault("case_id", f"CASE-{uuid.uuid4().hex[:8]}")
     order_id = state.get("order_id") or "ORD123"
@@ -123,14 +127,53 @@ def planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
             "Review the classification for contradictions",
             "Validate and finalize the decision",
         ],
-        "dependencies": ["order", "inventory", "payment", "warehouse", "carrier", "policy"],
-        "required_agents": ["order", "inventory", "payment", "warehouse", "carrier", "policy", "classifier"],
+        "dependencies": [
+            "order",
+            "inventory",
+            "payment",
+            "warehouse",
+            "carrier",
+            "policy"
+        ],
+        "required_agents": [
+            "order",
+            "inventory",
+            "payment",
+            "warehouse",
+            "carrier",
+            "policy",
+            "classifier"
+        ],
         "risk_level": "MEDIUM",
         "requires_human_approval": False,
     }
+
+    # Mentor-defined planning guardrail
+    planning_result = planning_policy_guardrail.validate(
+        state["plan"]["steps"]
+    )
+
+    if not planning_result["allowed"]:
+        state["guardrail_status"] = "BLOCKED"
+        state["guardrail_reason"] = planning_result["reason"]
+        state["errors"] = state.get("errors", []) + [
+            planning_result["reason"]
+        ]
+        state["messages"] = state.get("messages", []) + [
+            "Investigation plan blocked by planning guardrail."
+        ]
+        return state
+
+    state["guardrail_status"] = "ALLOWED"
+    state["guardrail_reason"] = planning_result["reason"]
+
     state["current_step"] = "plan_created"
     state["completed_steps"] = ["plan_created"]
-    state["messages"] = state.get("messages", []) + ["Investigation plan created."]
+
+    state["messages"] = state.get("messages", []) + [
+        "Investigation plan created and validated."
+    ]
+
     return state
 
 
@@ -142,54 +185,266 @@ def router_node(state: Dict[str, Any]) -> Dict[str, Any]:
     state["messages"] = state.get("messages", []) + [f"Router selected agents: {', '.join(selected)}."]
     return state
 
-
 def specialized_agents_node(state: Dict[str, Any]) -> Dict[str, Any]:
     findings: Dict[str, Any] = {}
+
     for agent in state.get("selected_agents", []):
         order_data = state.get("order_data", {})
+
         if agent == "order":
-            findings[agent] = {"status": "completed", "summary": f"Order {order_data.get('order_id')} has status {order_data.get('order_status')}."}
+            findings[agent] = {
+                "status": "completed",
+                "summary": f"Order {order_data.get('order_id')} has status {order_data.get('order_status')}."
+            }
+
         elif agent == "inventory":
-            findings[agent] = {"status": "completed", "summary": f"Inventory status: {order_data.get('inventory_status')}."}
+            findings[agent] = {
+                "status": "completed",
+                "summary": f"Inventory status: {order_data.get('inventory_status')}."
+            }
+
         elif agent == "payment":
-            findings[agent] = {"status": "completed", "summary": f"Payment status: {order_data.get('payment_status')}."}
+            findings[agent] = {
+                "status": "completed",
+                "summary": f"Payment status: {order_data.get('payment_status')}."
+            }
+
         elif agent == "warehouse":
-            findings[agent] = {"status": "completed", "summary": f"Warehouse status: {order_data.get('warehouse_status')}."}
+            findings[agent] = {
+                "status": "completed",
+                "summary": f"Warehouse status: {order_data.get('warehouse_status')}."
+            }
+
         elif agent == "carrier":
-            findings[agent] = {"status": "completed", "summary": f"Carrier status: {order_data.get('carrier_status')}."}
+            findings[agent] = {
+                "status": "completed",
+                "summary": f"Carrier status: {order_data.get('carrier_status')}."
+            }
+
         elif agent == "address":
-            findings[agent] = {"status": "completed", "summary": f"Address status: {order_data.get('shipping_address_status')}."}
+            findings[agent] = {
+                "status": "completed",
+                "summary": f"Address status: {order_data.get('shipping_address_status')}."
+            }
+
         elif agent == "policy":
-            findings[agent] = {"status": "completed", "summary": "Policy retrieval queued."}
+            findings[agent] = {
+                "status": "completed",
+                "summary": "Policy retrieval queued."
+            }
+
     state["agent_findings"] = findings
-    state["messages"] = state.get("messages", []) + ["Specialized agents completed investigation tasks."]
+
+    state["messages"] = state.get("messages", []) + [
+        "Specialized agents completed investigation tasks."
+    ]
+
     return state
 
+
+def input_guardrails_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Validate the request using both the existing security checks
+    and the mentor-defined input guardrail policy.
+    """
+
+    payload = {
+        "order_id": state.get("order_id"),
+        "customer_id": state.get("customer_id"),
+        "failure_description": state.get("failure_description"),
+        "request": state.get("request"),
+    }
+
+    # Existing project security checks
+    checks = input_guardrails(payload)
+
+    state["messages"] = state.get("messages", []) + [
+        "Input guardrails checked."
+    ]
+
+    state["errors"] = []
+
+    if checks["prompt_injection_detected"] or checks["secret_detected"]:
+        state["errors"].append(
+            "Unsafe request content detected."
+        )
+
+        state["guardrail_status"] = "BLOCKED"
+        state["guardrail_reason"] = (
+            "Existing security guardrail rejected the request."
+        )
+
+        return state
+
+    # Mentor-defined input guardrail
+    user_request = (
+        state.get("failure_description")
+        or state.get("request")
+        or ""
+    )
+
+    policy_result = input_policy_guardrail.validate(user_request)
+
+    if not policy_result["allowed"]:
+        state["errors"].append(policy_result["reason"])
+
+        state["guardrail_status"] = "BLOCKED"
+        state["guardrail_reason"] = policy_result["reason"]
+
+        return state
+
+    state["guardrail_status"] = "ALLOWED"
+    state["guardrail_reason"] = policy_result["reason"]
+
+    return state
+
+def route_after_input_guardrails(state: Dict[str, Any]) -> str:
+    """
+    Stop execution when input guardrails reject the request.
+    """
+
+    if state.get("guardrail_status") == "BLOCKED":
+        return "blocked"
+
+    return "continue"
+
+def route_after_planning_guardrails(state: Dict[str, Any]) -> str:
+    """
+    Stop execution when planning guardrails reject the plan.
+    """
+    if state.get("guardrail_status") == "BLOCKED":
+        return "blocked"
+
+    return "continue"
+
+
+def route_after_tool_guardrails(state: Dict[str, Any]) -> str:
+    """
+    Stop execution when tool guardrails block the action
+    or when human approval is required.
+    """
+    if state.get("guardrail_status") in {"BLOCKED", "WAITING_FOR_APPROVAL"}:
+        return "blocked"
+
+    return "continue"
 
 def tool_execution_node(state: Dict[str, Any]) -> Dict[str, Any]:
     executor = ToolExecutor()
     tool_results: List[Dict[str, Any]] = []
+
     for agent in state.get("selected_agents", []):
+
         if agent == "order":
-            result = executor.execute("order_lookup", order_id=state["order_id"])
+            tool_name = "order_lookup"
+            parameters = {
+                "order_id": state["order_id"]
+            }
+
         elif agent == "inventory":
-            result = executor.execute("inventory_lookup", sku=state.get("sku"), order_id=state.get("order_id"))
+            tool_name = "inventory_lookup"
+            parameters = {
+                "sku": state.get("sku"),
+                "order_id": state.get("order_id")
+            }
+
         elif agent == "payment":
-            result = executor.execute("payment_lookup", order_id=state.get("order_id"))
+            tool_name = "payment_lookup"
+            parameters = {
+                "order_id": state.get("order_id")
+            }
+
         elif agent == "warehouse":
-            result = executor.execute("warehouse_lookup", order_id=state.get("order_id"))
+            tool_name = "warehouse_lookup"
+            parameters = {
+                "order_id": state.get("order_id")
+            }
+
         elif agent == "carrier":
-            result = executor.execute("carrier_lookup", order_id=state.get("order_id"))
+            tool_name = "carrier_lookup"
+            parameters = {
+                "order_id": state.get("order_id")
+            }
+
         elif agent == "address":
-            result = executor.execute("address_validation", order_id=state.get("order_id"))
+            tool_name = "address_validation"
+            parameters = {
+                "order_id": state.get("order_id")
+            }
+
         elif agent == "policy":
-            result = executor.execute("policy_retrieval", query=state.get("failure_description") or state.get("request"))
+            tool_name = "policy_retrieval"
+            parameters = {
+                "query": (
+                    state.get("failure_description")
+                    or state.get("request")
+                )
+            }
+
         else:
             continue
-        tool_results.append({"agent": agent, "tool": result.name, "result": result.data, "status": result.status})
-    state["tool_calls"] = [{"agent": item["agent"], "tool": item["tool"]} for item in tool_results]
-    state["tool_results"] = tool_results
-    return state
+
+        # Mentor-defined tool guardrail
+        tool_check = tool_policy_guardrail.validate(
+            tool_name,
+            parameters
+        )
+
+        if not tool_check["allowed"]:
+            state["guardrail_status"] = "BLOCKED"
+            state["guardrail_reason"] = tool_check["reason"]
+            state["errors"] = state.get("errors", []) + [
+                tool_check["reason"]
+            ]
+            state["messages"] = state.get("messages", []) + [
+                f"Tool execution blocked: {tool_name}"
+            ]
+            return state
+
+              # Describe the operation that is about to execute
+        action_description = f"Execute approved read-only tool {tool_name}"
+
+        # Mentor-defined action guardrail
+        action_check = action_policy_guardrail.validate(
+            action_description,
+            human_approved=False
+        )
+
+        if action_check["status"] == "BLOCKED":
+            state["guardrail_status"] = "BLOCKED"
+            state["guardrail_reason"] = action_check["reason"]
+            state["errors"] = state.get("errors", []) + [
+                action_check["reason"]
+            ]
+            return state
+
+        if action_check["requires_approval"]:
+            approval_check = human_approval_guardrail.check(
+                action_description,
+                approved=False
+            )
+
+            state["guardrail_status"] = "WAITING_FOR_APPROVAL"
+            state["guardrail_reason"] = approval_check["reason"]
+            state["human_review_status"] = "WAITING_FOR_APPROVAL"
+
+            state["messages"] = state.get("messages", []) + [
+                "Execution stopped pending explicit human approval."
+            ]
+
+            return state
+
+        # Execute only after guardrail approval
+        result = executor.execute(
+            tool_name,
+            **parameters
+        )
+
+        tool_results.append({
+            "agent": agent,
+            "tool": result.name,
+            "result": result.data,
+            "status": result.status
+        })
 
 
 def policy_retrieval_node(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -299,11 +554,46 @@ def final_decision_node(state: Dict[str, Any]) -> Dict[str, Any]:
         f"Decision: {decision}. Recommended action: {state.get('recommended_action')}"
     )
     state["messages"] = state.get("messages", []) + [f"Final decision set to {decision}."]
-    return output_guardrails(state)
+    return state
 
 
 def output_guardrails_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    return output_guardrails(state)
+    # Existing project output security guardrail
+    state = output_guardrails(state)
+
+    final_response = state.get("final_response", "")
+
+    # Mentor-defined output guardrail
+    output_check = output_policy_guardrail.validate(
+        final_response,
+        execution_success=len(state.get("errors", [])) == 0
+    )
+
+    if not output_check["allowed"]:
+        state["guardrail_status"] = "BLOCKED"
+        state["guardrail_reason"] = output_check["reason"]
+        state["errors"] = state.get("errors", []) + [
+            output_check["reason"]
+        ]
+        state["messages"] = state.get("messages", []) + [
+            "Final response blocked by output guardrail."
+        ]
+
+        # Do not expose the unsafe response
+        state["final_response"] = (
+            "Final response blocked by output safety validation."
+        )
+
+        return state
+
+    state["guardrail_status"] = "ALLOWED"
+    state["guardrail_reason"] = output_check["reason"]
+
+    state["messages"] = state.get("messages", []) + [
+        "Final response passed output guardrail validation."
+    ]
+
+    return state
 
 
 def route_after_validator(state: Dict[str, Any]) -> str:
@@ -339,13 +629,34 @@ def build_graph() -> Any:
     workflow.add_node("output_guardrails", output_guardrails_node)
 
     workflow.set_entry_point("input_guardrails")
-    workflow.add_edge("input_guardrails", "case_intake")
+    workflow.add_conditional_edges(
+    "input_guardrails",
+    route_after_input_guardrails,
+    {
+        "continue": "case_intake",
+        "blocked": END,
+    },
+)
     workflow.add_edge("case_intake", "supervisor")
     workflow.add_edge("supervisor", "planner")
-    workflow.add_edge("planner", "router")
+    workflow.add_conditional_edges(
+    "planner",
+    route_after_planning_guardrails,
+    {
+        "continue": "router",
+        "blocked": END,
+    },
+)
     workflow.add_edge("router", "specialized_agents")
     workflow.add_edge("specialized_agents", "tool_execution")
-    workflow.add_edge("tool_execution", "policy_retrieval")
+    workflow.add_conditional_edges(
+    "tool_execution",
+    route_after_tool_guardrails,
+    {
+        "continue": "policy_retrieval",
+        "blocked": END,
+    },
+)
     workflow.add_edge("policy_retrieval", "classify_case")
     workflow.add_edge("classify_case", "critic")
     workflow.add_edge("critic", "reviewer")

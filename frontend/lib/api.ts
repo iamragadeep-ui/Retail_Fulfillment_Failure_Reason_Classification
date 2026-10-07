@@ -30,3 +30,57 @@ export async function fetchWorkflow(workflowId: string): Promise<any> {
   if (!res.ok) throw new Error('Workflow request failed');
   return res.json();
 }
+
+export async function fetchObservabilityLogs(
+  limit = 50,
+  offset = 0
+): Promise<any> {
+  const res = await fetch(
+    `${API_URL}/api/v1/observability/logs?limit=${limit}&offset=${offset}`,
+    { cache: 'no-store' }
+  );
+
+  if (!res.ok) throw new Error('Observability logs request failed');
+  return res.json();
+}
+
+export async function fetchObservabilityMetrics(): Promise<any> {
+  const res = await fetch(`${API_URL}/api/v1/observability/metrics`, {
+    cache: 'no-store',
+  });
+
+  if (!res.ok) throw new Error('Observability metrics request failed');
+  return res.json();
+}
+
+export async function fetchObservabilityTraces(
+  limit = 50,
+  offset = 0
+): Promise<any> {
+  const res = await fetch(
+    `${API_URL}/api/v1/observability/traces?limit=${limit}&offset=${offset}`,
+    { cache: 'no-store' }
+  );
+
+  if (!res.ok) throw new Error('Observability traces request failed');
+  return res.json();
+}
+
+export async function fetchObservabilityTrace(traceId: string): Promise<any> {
+  const res = await fetch(
+    `${API_URL}/api/v1/observability/traces/${encodeURIComponent(traceId)}`,
+    { cache: 'no-store' }
+  );
+
+  if (!res.ok) throw new Error('Trace details request failed');
+  return res.json();
+}
+
+export async function fetchObservabilityDrift(): Promise<any> {
+  const res = await fetch(`${API_URL}/api/v1/observability/drift`, {
+    cache: 'no-store',
+  });
+
+  if (!res.ok) throw new Error('Observability drift request failed');
+  return res.json();
+}

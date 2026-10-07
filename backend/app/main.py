@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
@@ -18,8 +19,21 @@ from .config import settings
 from .database import SessionLocal, get_db, init_db
 from .models import AgentRun, AuditLog, Case, Classification, HumanReview, WorkflowRun
 from .schemas import CaseAnalyzeRequest, CaseResponse, DashboardStats, ErrorResponse, HealthResponse, ReviewSubmission
+from .observability.context import TraceContext
+from .observability.instrumentation import (
+    end_span,
+    end_trace,
+    log_event,
+    record_error,
+    record_request_metric,
+    start_span,
+    start_trace,
+)
+from .observability.api import router as observability_router
 
 app = FastAPI(title=settings.APP_NAME, version="1.0.0")
+app.include_router(observability_router)
+
 init_db()
 app.add_middleware(
     CORSMiddleware,
@@ -43,6 +57,41 @@ def health() -> Dict[str, str]:
 @app.post("/api/v1/cases/analyze", status_code=status.HTTP_200_OK)
 def analyze_case(payload: CaseAnalyzeRequest, db: Session = Depends(get_db)) -> Dict[str, Any]:
     case_id = f"CASE-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{payload.order_id}"
+    request_start = time.perf_counter()
+
+    trace_context = TraceContext.create(
+        user_id=payload.customer_id or "UNKNOWN",
+        conversation_id=case_id,
+    )
+
+    start_trace(
+        trace_context,
+        service_name="retail-fulfillment-api",
+        metadata={
+            "case_id": case_id,
+            "order_id": payload.order_id,
+            "endpoint": "/api/v1/cases/analyze",
+        },
+    )
+
+    api_span_id = start_span(
+        trace_context,
+        span_name="analyze_case",
+        span_type="API",
+        input_data={
+            "case_id": case_id,
+            "order_id": payload.order_id,
+        },
+    )
+
+    log_event(
+        trace_context,
+        event="REQUEST_STARTED",
+        message="Fulfillment case analysis request started.",
+        endpoint="/api/v1/cases/analyze",
+        status="RUNNING",
+        metadata={"case_id": case_id},
+    )
     case_record = Case(
         case_id=case_id,
         order_id=payload.order_id,
@@ -58,7 +107,72 @@ def analyze_case(payload: CaseAnalyzeRequest, db: Session = Depends(get_db)) -> 
     workflow_input = payload.model_dump()
     workflow_input["case_id"] = case_id
     workflow_input["request"] = payload.failure_description
-    result = analyze_fulfillment_case(workflow_input)
+
+    workflow_start = time.perf_counter()
+
+    workflow_span_id = start_span(
+        trace_context,
+        span_name="fulfillment_workflow",
+        span_type="LANGGRAPH",
+        parent_span_id=api_span_id,
+        input_data={
+            "case_id": case_id,
+            "order_id": payload.order_id,
+        },
+    )
+
+    try:
+        result = analyze_fulfillment_case(workflow_input)
+
+        workflow_duration_ms = (
+            time.perf_counter() - workflow_start
+        ) * 1000
+
+        end_span(
+            workflow_span_id,
+            status="SUCCESS",
+            duration_ms=workflow_duration_ms,
+            output_data={
+                "final_decision": result.get("final_decision"),
+                "failure_reason": result.get("failure_reason"),
+            },
+        )
+
+        log_event(
+            trace_context,
+            event="WORKFLOW_COMPLETED",
+            message="LangGraph fulfillment workflow completed.",
+            endpoint="/api/v1/cases/analyze",
+            latency_ms=workflow_duration_ms,
+            status="SUCCESS",
+            metadata={"case_id": case_id},
+        )
+
+    except Exception as exc:
+        workflow_duration_ms = (
+            time.perf_counter() - workflow_start
+        ) * 1000
+
+        end_span(
+            workflow_span_id,
+            status="ERROR",
+            duration_ms=workflow_duration_ms,
+            error=str(exc),
+        )
+
+        record_error(
+            trace_context,
+            error_type=type(exc).__name__,
+            error_message=str(exc),
+            endpoint="/api/v1/cases/analyze",
+            metadata={
+                "case_id": case_id,
+                "stage": "fulfillment_workflow",
+            },
+        )
+
+        raise
+
     decision = result.get("final_decision") or "HUMAN_REVIEW"
 
     classification_record = Classification(
@@ -116,6 +230,59 @@ def analyze_case(payload: CaseAnalyzeRequest, db: Session = Depends(get_db)) -> 
         },
         "result": result,
     }
+
+    request_duration_ms = (
+        time.perf_counter() - request_start
+    ) * 1000
+
+    end_span(
+        api_span_id,
+        status="SUCCESS",
+        duration_ms=request_duration_ms,
+        output_data={
+            "case_id": case_id,
+            "final_decision": decision,
+        },
+    )
+
+    end_trace(
+        trace_context,
+        status="SUCCESS",
+        duration_ms=request_duration_ms,
+        metadata={
+            "case_id": case_id,
+            "order_id": payload.order_id,
+            "final_decision": decision,
+        },
+    )
+
+    record_request_metric(
+        trace_context,
+        endpoint="/api/v1/cases/analyze",
+        method="POST",
+        latency_ms=request_duration_ms,
+        status="SUCCESS",
+        status_code=200,
+        metadata={
+            "case_id": case_id,
+            "order_id": payload.order_id,
+        },
+    )
+
+    log_event(
+        trace_context,
+        event="REQUEST_COMPLETED",
+        message="Fulfillment case analysis request completed.",
+        endpoint="/api/v1/cases/analyze",
+        latency_ms=request_duration_ms,
+        status="SUCCESS",
+        metadata={
+            "case_id": case_id,
+            "final_decision": decision,
+        },
+    )
+
+    return response
     return response
 
 
