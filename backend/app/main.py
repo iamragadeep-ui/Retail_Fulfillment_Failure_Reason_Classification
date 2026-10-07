@@ -31,6 +31,7 @@ from .observability.instrumentation import (
 )
 from .observability.api import router as observability_router
 from .observability.schema import initialize_observability_schema
+from .observability.seed import seed_demo_data
 
 app = FastAPI(title=settings.APP_NAME, version="1.0.0")
 app.include_router(observability_router)
