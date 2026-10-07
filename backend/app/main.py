@@ -30,6 +30,7 @@ from .observability.instrumentation import (
     start_trace,
 )
 from .observability.api import router as observability_router
+from .observability.schema import initialize_observability_schema
 
 app = FastAPI(title=settings.APP_NAME, version="1.0.0")
 app.include_router(observability_router)
@@ -45,8 +46,9 @@ app.add_middleware(
 
 
 @app.on_event("startup")
-def startup_event() -> None:
-    init_db()
+def startup_event():
+    initialize_observability_schema()
+    seed_demo_data()
 
 
 @app.get("/health", response_model=HealthResponse)
